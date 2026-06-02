@@ -15,7 +15,7 @@ sed -i "s/vTRANSOCKS-PORT/$TRANSOCKS_PORT/g" /etc/transocks.toml
 
 echo "Restarting transocks and redirecting traffic via iptables"
 transocks &
-sysctl -w net.ipv4.conf.eth0.route_localnet=1
+# sysctl -w net.ipv4.conf.eth0.route_localnet=1
 
 echo "-----------------------------"
 echo "# Adding iptables chain rules"

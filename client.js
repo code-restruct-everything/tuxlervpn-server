@@ -1,5 +1,7 @@
 var WebSocket = require("ws");
 
+const TARGET_COUNTRY = process.env.TUXLER_COUNTRY || "any";
+
 const PORT_START = 1701;
 const PORT_STEP = 9001;
 const CMD_SET_PROXY = "SET_PROXY";
@@ -37,7 +39,7 @@ function NewMessageApp(msg) {
     case "YOUR_IP":
       App.setProxy();
       setTimeout(function () {
-        App.changeIPCountryCityNew("any", "Any", false, true);
+        App.changeIPCountryCityNew(TARGET_COUNTRY, "Any", false, true);
       }, 1500);
       break;
   }
@@ -162,7 +164,7 @@ function startWebSocket() {
     appConnection = instance;
 
     App.setProxy();
-    App.changeIPCountryCityNew("any", "Any", false, true);
+    App.changeIPCountryCityNew(TARGET_COUNTRY, "Any", false, true);
   };
 
   for (let i = 0; i < ports_web_sockets.length; i++) {
