@@ -21,23 +21,22 @@
 docker build -t docker-tuxlervpn-server .
 ```
 
-### 2. 声明前置代理（若宿主机网络受限）
-```bash
-# 声明本地代理，例如 Clash 端口 7890
-export PROXY_URL=http://172.17.0.1:7890
-```
+### 2. 一键运行容器并配置前置代理
 
-### 3. 一键运行容器
+如果您的宿主机网络受限（例如国内环境），可以直接在 `docker run` 命令中通过 `-e PROXY_URL` 参数将流量指向您的本地代理工具（例如 Clash 运行在宿主机的局域网 IP `172.17.0.1` 上的 `7890` 端口）：
+
 ```bash
 docker run -d \
     --name tuxler-server \
+    -e PROXY_URL=http://172.17.0.1:7890 \
     --cap-add=NET_ADMIN \
     --hostname="$(hostname)" \
     --shm-size="2g" \
     -p 127.0.0.1:1701:1701/tcp \
     -p 127.0.0.1:23321:23321/tcp \
     --rm \
-    docker-tuxlervpn-server
+    docker-tuxlervpn-server \
+    node client.js
 ```
 
 ---
@@ -47,9 +46,13 @@ docker run -d \
 由于 Podman 默认采用无 Root（Rootless）模式，内核限制更为严格，需要根据部署形态选择以下命令：
 
 ### 准备工作（仅限非 Root/Rootless 模式）
-在 Rootless 模式下，容器内进程无法直接运行 `sysctl` 指令。
-1. 请编辑当前目录下的 [startup.sh](startup.sh) 文件。
-2. 将第 18 行 `sysctl -w net.ipv4.conf.eth0.route_localnet=1` 在行首添加 `#` 注释掉。
+1. **网络穿透配置**：在 Rootless 模式下，Podman 默认采用 `slirp4netns` 虚拟网络，它默认阻断容器向宿主机 `127.0.0.1` 环路的网络请求。为了让容器能够顺利连接物理机上的 Clash / 代理服务（如端口 `7890`），我们必须：
+   - 在创建 Pod 或容器时，额外追加 **`--network slirp4netns:allow_host_loopback=true`** 参数解锁环路限制。
+   - 在容器内部声明 `PROXY_URL` 时，将代理地址指向 **`http://10.0.2.2:7890`**（`10.0.2.2` 是 `slirp4netns` 路由回宿主机 loopback 的专用网关 IP）：
+     ```bash
+     export PROXY_URL=http://10.0.2.2:7890
+     ```
+2. **内核修改避空**：编辑当前目录下的 [startup.sh](startup.sh) 文件，将第 18 行 `sysctl -w net.ipv4.conf.eth0.route_localnet=1` 注释掉（行首加 `#`），防止因权限不足导致容器构建启动失败。
 
 ---
 
@@ -64,6 +67,7 @@ podman build -t docker-tuxlervpn-server .
 ```bash
 podman run -d \
     --name tuxler-server \
+    -e PROXY_URL=http://10.0.2.2:7890 \
     --cap-add=NET_ADMIN \
     --sysctl net.ipv4.conf.all.route_localnet=1 \
     --hostname="$(hostname)" \
@@ -71,7 +75,8 @@ podman run -d \
     -p 127.0.0.1:1701:1701/tcp \
     -p 127.0.0.1:23321:23321/tcp \
     --rm \
-    docker-tuxlervpn-server
+    docker-tuxlervpn-server \
+    node client.js
 ```
 *(在启动时通过 `--sysctl` 命令行参数由引擎代为配置内核参数。)*
 
@@ -85,6 +90,7 @@ Pod 模式将网络命名空间、端口映射与内核参数配置在 Pod 级�
 ```bash
 podman pod create \
     --name tuxler-pod \
+    --network slirp4netns:allow_host_loopback=true \
     --sysctl net.ipv4.conf.all.route_localnet=1 \
     --publish 127.0.0.1:1701:1701/tcp \
     --publish 127.0.0.1:23321:23321/tcp
@@ -96,10 +102,12 @@ podman run -d \
     --pod tuxler-pod \
     --name tuxler-container \
     -e TUXLER_COUNTRY=AU \
+    -e PROXY_URL=http://10.0.2.2:7890 \
     --cap-add=NET_ADMIN \
     --shm-size="2g" \
     --rm \
-    docker-tuxlervpn-server
+    docker-tuxlervpn-server \
+    node client.js
 ```
 *(注：容器加入 Pod 后会自动继承 Pod 的网络和映射，无需在 run 命令中重复配置端口与 sysctl。)*
 
@@ -128,6 +136,7 @@ curl --proxy socks4://127.0.0.1:23321 http://lumtest.com/myip.json
   ```bash
   podman pod create \
       --name tuxler-pod-au \
+      --network slirp4netns:allow_host_loopback=true \
       --sysctl net.ipv4.conf.all.route_localnet=1 \
       --publish 127.0.0.1:17001:1701/tcp \
       --publish 127.0.0.1:10080:23321/tcp
@@ -139,10 +148,12 @@ curl --proxy socks4://127.0.0.1:23321 http://lumtest.com/myip.json
       --pod tuxler-pod-au \
       --name tuxler-container-au \
       -e TUXLER_COUNTRY=AU \
+      -e PROXY_URL=http://10.0.2.2:7890 \
       --cap-add=NET_ADMIN \
       --shm-size="2g" \
       --rm \
-      docker-tuxlervpn-server
+      docker-tuxlervpn-server \
+      node client.js
   ```
 
 ---
@@ -153,6 +164,7 @@ curl --proxy socks4://127.0.0.1:23321 http://lumtest.com/myip.json
   ```bash
   podman pod create \
       --name tuxler-pod-tr \
+      --network slirp4netns:allow_host_loopback=true \
       --sysctl net.ipv4.conf.all.route_localnet=1 \
       --publish 127.0.0.1:17002:1701/tcp \
       --publish 127.0.0.1:10081:23321/tcp
@@ -164,10 +176,12 @@ curl --proxy socks4://127.0.0.1:23321 http://lumtest.com/myip.json
       --pod tuxler-pod-tr \
       --name tuxler-container-tr \
       -e TUXLER_COUNTRY=TR \
+      -e PROXY_URL=http://10.0.2.2:7890 \
       --cap-add=NET_ADMIN \
       --shm-size="2g" \
       --rm \
-      docker-tuxlervpn-server
+      docker-tuxlervpn-server \
+      node client.js
   ```
 
 ---

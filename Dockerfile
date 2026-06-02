@@ -25,10 +25,11 @@ RUN apt-get update
 # Install Wine
 RUN apt-get install -y software-properties-common gnupg2
 # 2. 将 WineHQ 官方源替换为清华大学开源软件镜像源以加速下载
-RUN wget -nc https://mirrors.tuna.tsinghua.edu.cn/winehq/wine-builds/winehq.key
+# (注：清华镜像不直接同步 key 文件，密钥文件极小且直接从官方下载极快)
+RUN wget -nc https://dl.winehq.org/wine-builds/winehq.key
 RUN apt-key add winehq.key
-# 将 Ubuntu 版本代号由 18.04 的 bionic 修改为 20.04 的 focal
-RUN apt-add-repository 'deb https://mirrors.tuna.tsinghua.edu.cn/winehq/wine-builds/ubuntu/ focal main'
+# 将 Ubuntu 版本代号由 18.04 的 bionic 修改为 20.04 的 focal（清华源正确路径为 wine-builds，不含 winehq 前缀）
+RUN apt-add-repository 'deb https://mirrors.tuna.tsinghua.edu.cn/wine-builds/ubuntu/ focal main'
 # 注：Ubuntu 20.04 已经原生包含现代版 SDL2，无需再从 PPA 安装 'ppa:cybermax-dexter/sdl2-backport'
 RUN apt-get install -y --install-recommends winehq-stable winbind iptables xvfb
 # DEBUG
@@ -52,7 +53,7 @@ COPY startup.sh /usr/local/bin/entrypoint.sh
 COPY transocks /usr/local/bin/transocks
 COPY client.js .
 
-RUN chmod +x /usr/local/bin/entrypoint.sh && tar -xvf setup.tar
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/transocks && tar -xvf setup.tar
 
 # Run application
 ENTRYPOINT ["/bin/bash", "entrypoint.sh"]
