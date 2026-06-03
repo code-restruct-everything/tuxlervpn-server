@@ -52,6 +52,7 @@ COPY setup.tar .
 COPY startup.sh /usr/local/bin/entrypoint.sh
 COPY transocks /usr/local/bin/transocks
 COPY client.js .
+COPY proxy-forward.js .
 
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/transocks && tar -xvf setup.tar
 

@@ -132,14 +132,12 @@ curl --proxy socks4://127.0.0.1:23321 http://lumtest.com/myip.json
 
 ### 1. 启动澳大利亚 (AU) 实例
 
-- **创建澳大利亚专属 Pod**（映射控制端口 `17001`，代理出口 `10080`）：
+- **创建澳大利亚专属 Pod**（映射代理出口 `10080`）：
   ```bash
   podman pod create \
       --name tuxler-pod-au \
       --network slirp4netns:allow_host_loopback=true \
-      --sysctl net.ipv4.conf.all.route_localnet=1 \
-      --publish 127.0.0.1:17001:1701/tcp \
-      --publish 127.0.0.1:10080:23321/tcp
+      --publish 127.0.0.1:10080:10080/tcp
   ```
 
 - **启动澳洲容器并绑定至该 Pod**（指定 `TUXLER_COUNTRY=AU`）：
@@ -149,8 +147,12 @@ curl --proxy socks4://127.0.0.1:23321 http://lumtest.com/myip.json
       --name tuxler-container-au \
       -e TUXLER_COUNTRY=AU \
       -e PROXY_URL=http://10.0.2.2:7890 \
-      --cap-add=NET_ADMIN \
-      --shm-size="2g" \
+      -e TUXLER_ENABLE_IPTABLES=0 \
+      -e TUXLER_FORWARD_LISTEN_PORT=10080 \
+      --memory=1g \
+      --memory-swap=1g \
+      --pids-limit=256 \
+      --shm-size=512m \
       --rm \
       docker-tuxlervpn-server \
       node client.js
@@ -160,14 +162,12 @@ curl --proxy socks4://127.0.0.1:23321 http://lumtest.com/myip.json
 
 ### 2. 启动土耳其 (TR) 实例
 
-- **创建土耳其专属 Pod**（映射控制端口 `17002`，代理出口 `10081`）：
+- **创建土耳其专属 Pod**（映射代理出口 `10081`）：
   ```bash
   podman pod create \
       --name tuxler-pod-tr \
       --network slirp4netns:allow_host_loopback=true \
-      --sysctl net.ipv4.conf.all.route_localnet=1 \
-      --publish 127.0.0.1:17002:1701/tcp \
-      --publish 127.0.0.1:10081:23321/tcp
+      --publish 127.0.0.1:10081:10080/tcp
   ```
 
 - **启动土耳其容器并绑定至该 Pod**（指定 `TUXLER_COUNTRY=TR`）：
@@ -177,8 +177,12 @@ curl --proxy socks4://127.0.0.1:23321 http://lumtest.com/myip.json
       --name tuxler-container-tr \
       -e TUXLER_COUNTRY=TR \
       -e PROXY_URL=http://10.0.2.2:7890 \
-      --cap-add=NET_ADMIN \
-      --shm-size="2g" \
+      -e TUXLER_ENABLE_IPTABLES=0 \
+      -e TUXLER_FORWARD_LISTEN_PORT=10080 \
+      --memory=1g \
+      --memory-swap=1g \
+      --pids-limit=256 \
+      --shm-size=512m \
       --rm \
       docker-tuxlervpn-server \
       node client.js
@@ -199,3 +203,81 @@ curl --proxy socks4://127.0.0.1:23321 http://lumtest.com/myip.json
   ```bash
   curl --proxy socks4://127.0.0.1:10081 http://lumtest.com/myip.json
   ```
+
+---
+
+## 五、资源限制与故障复盘
+
+### 1. 不要再使用旧的 rootless 映射方式
+
+旧命令里这种映射不适合当前 rootless 方案：
+
+```bash
+--publish 127.0.0.1:10080:23321/tcp
+--cap-add=NET_ADMIN
+--sysctl net.ipv4.conf.all.route_localnet=1
+```
+
+原因是 Tuxler 代理实际监听在容器内部的 `127.0.0.1:23321`。Podman publish 进入的是容器网卡侧端口，不能直接访问容器 loopback。旧方案依赖 startup.sh 里的 iptables DNAT 转发，但 rootless Podman 通常没有权限修改容器内 `nat` 表。
+
+当前推荐链路是：
+
+```text
+宿主机 127.0.0.1:10080
+-> 容器 0.0.0.0:10080
+-> proxy-forward.js
+-> 容器 127.0.0.1:23321
+-> Tuxler SOCKS 代理
+```
+
+### 2. 内存与进程数护栏
+
+`--shm-size=512m` 只是 `/dev/shm` 的上限，不是启动时预分配的内存。真正用于保护宿主机的是：
+
+```bash
+--memory=1g
+--memory-swap=1g
+--pids-limit=256
+```
+
+不要在没有 `--memory` 和 `--pids-limit` 的情况下并行启动多个国家实例。Wine、Xvfb、Tuxler helper、Node、transocks 都会占用资源；如果异常增长，没有上限时可能把宿主机拖入 OOM 或 swap 抖动。
+
+运行后观察资源：
+
+```bash
+podman stats tuxler-container-au
+```
+
+### 3. 清理命令的边界
+
+以下命令可以停止并删除 Podman 对象：
+
+```bash
+podman rm -f tuxler-container-au
+podman pod rm -f tuxler-pod-au
+```
+
+但如果宿主机已经 OOM、SSH 被杀、系统正在大量 swap，删除容器不一定能让服务器立刻恢复可连接。此时需要通过云厂商控制台、VNC、IPMI 或物理控制台进入机器，必要时先重启。
+
+恢复后检查：
+
+```bash
+free -h
+podman ps -a
+podman pod ps
+ps aux --sort=-rss | head -30
+ps aux | grep -Ei 'wine|wineserver|Xvfb|ExtensionHelper|podman|conmon|slirp4netns|transocks|node'
+dmesg -T | grep -Ei 'oom|out of memory|killed process'
+journalctl -k -b -1 | grep -Ei 'oom|out of memory|killed process'
+```
+
+如确认有残留进程，再谨慎清理：
+
+```bash
+pkill -f 'ExtensionHelper|wineserver|Xvfb|transocks|proxy-forward|client.js'
+pkill -f 'conmon|slirp4netns'
+```
+
+### 4. 安全边界
+
+当前方案应保持 rootless Podman，不使用 `--privileged`，不使用 `--cap-add=NET_ADMIN`，并只把代理端口绑定到宿主机 `127.0.0.1`。仓库包含 `setup.tar` 内的 Windows exe 和 `transocks` 二进制，无法仅凭源码审查证明绝对安全；本机 Microsoft Defender 扫描当前仓库未发现威胁，但这不等于绝对安全保证。
