@@ -1,5 +1,7 @@
 # Rootless Podman 启动与复盘说明
 
+不好用，速度奇慢，不推荐。
+
 ## 1. 推荐启动方式
 
 当前推荐方案是 rootless Podman + 用户态端口转发：
