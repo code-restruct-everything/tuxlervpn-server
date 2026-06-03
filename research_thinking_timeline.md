@@ -314,3 +314,48 @@
 - 证据等级（已验证 / 观察 / 猜想）: 已验证
 - 引出的下一步问题: 需要在目标 Podman 环境重新构建镜像后，用不带这两个环境变量的新命令验证代理出口。
 - 下一步计划: 向用户说明默认值已改好，并给出保留/覆盖方式。
+
+## N022 - 启动链路静态复查与 PROXY_URL 边界
+
+- branch_id: B002
+- parent_node_ids: N021
+- relation_type: next
+- 当时问题: 用户要求再次检查当前功能和启动命令是否正常。
+- 触发原因（为什么想到这个）: 经过多轮修改后，推荐命令、默认值、转发器、旧脚本和文档存在交叉，需要重新确认实际文件状态，而不是只凭上一轮结论。
+- 当时假设: rootless 用户态转发链路应该能解决宿主机访问容器内 Tuxler SOCKS 代理的问题，但默认关闭 iptables 后，原来依赖 transocks/iptables 的 `PROXY_URL` 透明转发能力不再成立。
+- 采取动作（做了什么实验/改了什么）: 运行 `node --check client.js`、`node --check proxy-forward.js`、`bash -n startup.sh` 等静态检查；搜索 `--publish`、`TUXLER_ENABLE_IPTABLES`、`PROXY_URL`、`23321` 等启动关键参数；读取 startup.sh 和 proxy-forward.js 核对实际链路。
+- 观察结果（事实）: 静态语法检查通过；startup.sh 默认 `TUXLER_ENABLE_IPTABLES:-0`，会跳过 iptables；proxy-forward.js 默认监听 `0.0.0.0:10080` 并转发到 `127.0.0.1:23321`；podman.md 中仍显式传了与默认值一致的 `TUXLER_ENABLE_IPTABLES=0` 和 `TUXLER_FORWARD_LISTEN_PORT=10080`；run.sh 和 docker-compose.yml 仍保留旧直映射入口。
+- 当时结论（解释）: 推荐 rootless 代理出口链路静态上正常，但不能说整个仓库所有启动入口都正常；并且默认关闭 iptables 后，`PROXY_URL` 只会写入 transocks 配置，不能保证 Tuxler/Wine 外联都经过宿主机代理。如果运行环境必须依赖上游代理，仍需额外验证或重新设计出站代理策略。
+- 证据等级（已验证 / 观察 / 猜想）: 已验证
+- 引出的下一步问题: 需要在目标 Linux/Podman 环境端到端验证两件事：宿主机 `10080` 是否能访问 Tuxler 出口，以及 Tuxler 外联是否允许直接出网或需要受控上游代理。
+- 下一步计划: 向用户给出明确检查结论、可用范围和剩余风险点。
+
+## N023 - Tuxler 连接服务器是否走 PROXY_URL 的矛盾
+
+- branch_id: B002
+- parent_node_ids: N022
+- relation_type: next
+- 当时问题: 用户指出如果不使用 `10.0.2.2:7880`，Tuxler 怎么连接自己的服务器；用户记得需要借助宿主机代理建立连接。
+- 触发原因（为什么想到这个）: 当前默认 rootless 方案关闭了 iptables，而 `PROXY_URL` 原本只通过 transocks + iptables 透明重定向生效；这和用户“必须走代理才能连 Tuxler”的运行前提发生冲突。
+- 当时假设: 如果容器所在网络可以直连 Tuxler，关闭 iptables 后仍能连接；如果不能直连，则当前默认方案可能无法让 Wine/Tuxler 外联走 `10.0.2.2:7880`，除非 Tuxler 程序自身支持并读取系统代理或另行配置 Wine/WinHTTP 代理。
+- 采取动作（做了什么实验/改了什么）: 搜索 startup.sh、podman.md 和 run.md 中 `PROXY_URL`、transocks、iptables OUTPUT/REDIRECT 的关系，核对当前默认启动链路。
+- 观察结果（事实）: startup.sh 总是启动 transocks 并写入 `PROXY_URL`，但只有 `TUXLER_ENABLE_IPTABLES=1` 时才会添加 `iptables -t nat -A OUTPUT ... REDIRECT --to-ports 12345`；当前推荐默认是 `TUXLER_ENABLE_IPTABLES=0`，因此 transocks 不会自动接管 Wine/Tuxler 的出站 TCP。
+- 当时结论（解释）: 当前默认方案修好了宿主机访问容器内 SOCKS 出口的问题，但没有保证 Tuxler/Wine 连接服务器时一定走宿主机代理；如果目标环境必须通过 `10.0.2.2:7880` 才能连 Tuxler，需要新增非 iptables 的出站代理方案，或重新评估是否接受 rootful/iptables 透明代理。
+- 证据等级（已验证 / 观察 / 猜想）: 已验证
+- 引出的下一步问题: 需要验证 Tuxler Windows helper 是否支持 Wine 环境下的系统代理/WinHTTP 代理，或选择外层网络代理方案。
+- 下一步计划: 向用户解释当前矛盾，并列出可选修复方向：直接出网、Wine 系统代理、外层网络代理、或恢复 iptables 透明代理但牺牲 rootless 安全边界。
+
+## N024 - 上游代理可能只用于 Tuxler bootstrap 的假设
+
+- branch_id: B002
+- parent_node_ids: N023
+- relation_type: next
+- 当时问题: 用户认为 `10.0.2.2:7880` 代理可能只需要用于 Tuxler 初始建连，连接建立后就不再需要持续走这个代理。
+- 触发原因（为什么想到这个）: 用户补充了对 Tuxler 建连机制的理解，这会改变是否必须长期强制所有 Wine/Tuxler 出站走 `PROXY_URL` 的判断。
+- 当时假设: Tuxler 可能分为 bootstrap/登录/控制通道和后续代理出口通道；在受限网络里，bootstrap 阶段可能需要宿主机代理，后续出口不一定持续依赖该代理。
+- 采取动作（做了什么实验/改了什么）: 重新对照 startup.sh 的现有能力，区分“通过 transocks/iptables 长期透明代理所有 TCP”与“仅在启动早期临时代理建连”两个不同设计。
+- 观察结果（事实）: 当前代码没有实现“只在初始建连阶段使用 PROXY_URL，成功后自动关闭代理”的逻辑；只有两种状态：`TUXLER_ENABLE_IPTABLES=1` 时长期透明重定向，或默认 `0` 时不透明重定向。
+- 当时结论（解释）: 用户的假设有可能成立，但当前代码不能保证它；如果要采用“bootstrap-only 代理”策略，需要用日志和网络连接实测确认 Tuxler 连接成功后是否还能在关闭上游代理/断开 `10.0.2.2:7880` 后维持工作。
+- 证据等级（已验证 / 观察 / 猜想）: 猜想
+- 引出的下一步问题: 需要设计验证实验：启动阶段允许访问上游代理，Tuxler 显示 CONNECTED 后关闭上游代理或阻断对应连接，再观察住宅出口和 Tuxler 状态是否持续可用。
+- 下一步计划: 向用户说明这个假设的合理性和当前代码缺口，并给出最小验证步骤。
