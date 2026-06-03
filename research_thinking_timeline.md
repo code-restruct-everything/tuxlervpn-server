@@ -299,3 +299,18 @@
 - 证据等级（已验证 / 观察 / 猜想）: 观察
 - 引出的下一步问题: 是否需要进一步把 `run.md` 和旧 `run.sh` 也统一成同样的中文安全约束，避免多个文档入口不一致。
 - 下一步计划: 告知用户文档已中文化，并强调防火墙阻断与服务可用性之间的取舍。
+
+## N021 - 将 rootless 转发设为默认启动行为
+
+- branch_id: B002
+- parent_node_ids: N020
+- relation_type: next
+- 当时问题: 用户希望不再手动传 `TUXLER_ENABLE_IPTABLES=0` 和 `TUXLER_FORWARD_LISTEN_PORT=10080`，默认就不创建 iptables，且转发监听端口默认是 10080。
+- 触发原因（为什么想到这个）: 经过前面 rootless 安全方案确认后，这两个环境变量已经从“可选配置”变成推荐默认行为，继续要求用户手动传容易误用或漏传。
+- 当时假设: `proxy-forward.js` 已经默认监听 `0.0.0.0:10080` 并转发到 `127.0.0.1:23321`；只需要把 startup.sh 的 iptables 默认值改为关闭，并从文档启动命令移除冗余环境变量。
+- 采取动作（做了什么实验/改了什么）: 将 startup.sh 中 `TUXLER_ENABLE_IPTABLES` 默认值从 `1` 改为 `0`，修正跳过 iptables 的日志；从 run.md 和 podman.md 的 AU/TR 命令中删除 `TUXLER_ENABLE_IPTABLES=0` 和 `TUXLER_FORWARD_LISTEN_PORT=10080`；更新 podman.md 说明默认端口可通过环境变量覆盖。
+- 观察结果（事实）: `bash -n startup.sh` 和 `node --check proxy-forward.js` 通过；搜索确认启动命令中不再需要手动传这两个变量；`proxy-forward.js` 仍保持默认端口 10080。
+- 当时结论（解释）: 当前默认启动行为已经切到 rootless 用户态转发：默认不创建 iptables，默认监听容器内 10080；如需恢复旧 iptables 行为，必须显式传 `TUXLER_ENABLE_IPTABLES=1`。
+- 证据等级（已验证 / 观察 / 猜想）: 已验证
+- 引出的下一步问题: 需要在目标 Podman 环境重新构建镜像后，用不带这两个环境变量的新命令验证代理出口。
+- 下一步计划: 向用户说明默认值已改好，并给出保留/覆盖方式。

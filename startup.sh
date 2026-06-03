@@ -13,11 +13,11 @@ echo "Setting config variables"
 sed -i "s|vPROXY-URL|$PROXY_URL|g" /etc/transocks.toml
 sed -i "s/vTRANSOCKS-PORT/$TRANSOCKS_PORT/g" /etc/transocks.toml
 
-echo "Restarting transocks and redirecting traffic via iptables"
+echo "Restarting transocks"
 transocks &
 # sysctl -w net.ipv4.conf.eth0.route_localnet=1
 
-if [[ "${TUXLER_ENABLE_IPTABLES:-1}" == "1" ]]; then
+if [[ "${TUXLER_ENABLE_IPTABLES:-0}" == "1" ]]; then
 echo "-----------------------------"
 echo "# Adding iptables chain rules"
 echo "-----------------------------"
@@ -40,7 +40,7 @@ iptables -v -t nat -A OUTPUT -p tcp -j REDSOCKS
 iptables -v -t nat -I PREROUTING -p tcp --match multiport --dports 1701,10702,19703,28704,37705,46706,55707,64708 -j DNAT --to-destination 127.0.0.1
 iptables -v -t nat -I PREROUTING -p tcp --match multiport --dports 23321,23322,23323,23324,23325,23326,23327,23328 -j DNAT --to-destination 127.0.0.1
 else
-echo "Skipping iptables chain rules (TUXLER_ENABLE_IPTABLES=${TUXLER_ENABLE_IPTABLES})"
+echo "Skipping iptables chain rules (TUXLER_ENABLE_IPTABLES=${TUXLER_ENABLE_IPTABLES:-0})"
 fi
 
 sleep 1s
