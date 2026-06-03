@@ -359,3 +359,78 @@
 - 证据等级（已验证 / 观察 / 猜想）: 猜想
 - 引出的下一步问题: 需要设计验证实验：启动阶段允许访问上游代理，Tuxler 显示 CONNECTED 后关闭上游代理或阻断对应连接，再观察住宅出口和 Tuxler 状态是否持续可用。
 - 下一步计划: 向用户说明这个假设的合理性和当前代码缺口，并给出最小验证步骤。
+
+## N025 - TR 容器日志显示控制链路成功但出口未最终确认
+
+- branch_id: B002
+- parent_node_ids: N024
+- relation_type: next
+- 当时问题: 用户贴出 TR 容器日志，询问是否已经正常连接。
+- 触发原因（为什么想到这个）: 日志来自新 rootless 默认方案，需要判断 `proxy-forward`、iptables 跳过、Tuxler WebSocket 控制和最终住宅代理出口分别处于什么状态。
+- 当时假设: 如果日志出现 `proxy-forward listening` 和 `~onsuccess~ ws://127.0.0.1:1701/tuxler`，说明容器入口转发和 Tuxler 控制链路已经启动；但只有看到 `CONNECTED`/`ACCOUNT_INFO` 或 curl 代理测试成功，才能确认最终代理出口可用。
+- 采取动作（做了什么实验/改了什么）: 阅读用户贴出的 `podman logs -f tuxler-container-tr` 完整日志，按 startup.sh、proxy-forward.js 和 client.js 的启动顺序拆解状态。
+- 观察结果（事实）: 日志显示 `Skipping iptables chain rules (TUXLER_ENABLE_IPTABLES=0)`，没有 nat 权限错误；`proxy-forward` 监听 `0.0.0.0:10080 -> 127.0.0.1:23321`；client.js 最终连接上 `ws://127.0.0.1:1701/tuxler` 并发送 `SET_PROXY` 和 `changeIPCountryCityNew` 的 TR 请求；日志末尾仍只有 `DISCONNECTED`、`NEW_TYPE`，未看到 `CONNECTED` 和 `ACCOUNT_INFO`。
+- 当时结论（解释）: 新 rootless 启动链路已经部分正常，至少不再卡在端口转发和控制口连接；但还不能确认 Tuxler 已经完成 TR 出口连接，必须继续等待日志或执行宿主机 `curl --proxy socks4://127.0.0.1:10081` 验证。
+- 证据等级（已验证 / 观察 / 猜想）: 观察
+- 引出的下一步问题: 需要用户继续观察是否出现 `CONNECTED`，或直接用宿主机代理端口测试 `lumtest` 返回国家。
+- 下一步计划: 告诉用户这是部分正常，不是最终成功，并给出下一条验证命令。
+
+## N026 - Tuxler 账号控制链路已连上但 TR 出口仍需验证
+
+- branch_id: B002
+- parent_node_ids: N025
+- relation_type: next
+- 当时问题: 用户贴出 `ACCOUNT_INFO`、`LIMITS_INFO`、`YOUR_IP` 和再次发送 TR 切换命令的日志，询问是否已经连上。
+- 触发原因（为什么想到这个）: 日志中首次出现账号和限制信息，说明 Tuxler helper 与 Tuxler 服务端交互已更进一步，需要区分“账号/控制链路连上”和“目标国家住宅代理出口已切换成功”。
+- 当时假设: `ACCOUNT_INFO`/`LIMITS_INFO` 表示 Tuxler 应用层已连上并拿到账户状态；`YOUR_IP` 显示 China/Beijing 表示当前底层公网出口仍是中国；之后 `SET_PROXY` 和 `changeIPCountryCityNew(TR)` 才是触发切换目标国家。
+- 采取动作（做了什么实验/改了什么）: 读取用户贴出的日志字段，按 client.js 中 `YOUR_IP` 触发 `setProxy` 和 `changeIPCountryCityNew` 的逻辑解释当前状态。
+- 观察结果（事实）: 日志包含 `ACCOUNT_INFO`、`LIMITS_INFO`、`PREMIUM_INFO`、`RESET_INFO`、`MAC_VERSION_PORT_BLOCK`、`YOUR_IP`，其中 `isIPSharingActive:true`，`YOUR_IP` 是 China/Beijing；随后 client.js 发出 `SET_PROXY` 和 TR 切换请求。
+- 当时结论（解释）: 当前可确认 Tuxler 账号/控制链路已经连上，Tuxler 能识别本机公网 IP 并接收 TR 切换命令；但仍不能仅凭这段日志确认宿主机代理端口已经输出 TR IP，最终要以 `curl --proxy socks4://127.0.0.1:10081 http://lumtest.com/myip.json` 返回 TR 为准。
+- 证据等级（已验证 / 观察 / 猜想）: 观察
+- 引出的下一步问题: 需要执行宿主机代理端口 curl 测试，确认出口国家是否为 TR，且资源占用是否在限制内。
+- 下一步计划: 告诉用户这算 Tuxler 控制连接成功，但不是代理出口最终成功，并给出验证命令。
+
+## N027 - 宿主机代理出口可用但目标国家未命中 TR
+
+- branch_id: B002
+- parent_node_ids: N026
+- relation_type: next
+- 当时问题: 用户通过宿主机 `127.0.0.1:10081` 连续 curl lumtest，出口先返回 CN/Beijing，后返回 GB/Harringay，而不是期望的 TR。
+- 触发原因（为什么想到这个）: 这是第一次在新 rootless 用户态转发方案下确认宿主机代理端口实际能出网，需要区分“端口链路成功”和“目标国家选择成功”。
+- 当时假设: 如果 curl 能返回 CN/GB JSON，说明 host -> podman publish -> proxy-forward -> Tuxler SOCKS 的链路已经打通；国家不为 TR 则说明 Tuxler 的 `changeIPCountryCityNew(TR)` 未稳定命中，可能是 TR 池无可用住宅 IP、切换仍在进行、免费限制/地区回退或 Tuxler 调度选择了其它可用国家。
+- 采取动作（做了什么实验/改了什么）: 读取用户连续多次 curl 结果，比较国家从 CN 到 GB 的变化，并与前面日志中 TR 切换请求已发送但未看到明确 TR 成功事件的状态合并判断。
+- 观察结果（事实）: 宿主机 `10081` 连续请求均成功返回 lumtest JSON；前三次为 CN/Beijing/China Networks Inter-Exchange，后两次为 GB/Harringay/Virgin Media；没有出现 TR。
+- 当时结论（解释）: 新端口转发功能已经可用，容器代理服务能从宿主机访问；但当前 Tuxler 出口国家没有按 TR 生效，不能把这个实例标记为 TR 成功，只能标记为“代理可用但国家不稳定/未命中”。
+- 证据等级（已验证 / 观察 / 猜想）: 已验证
+- 引出的下一步问题: 需要继续检查 Tuxler 日志是否有国家池/切换失败信息，或修改 client.js 增加状态日志/重试逻辑来确认 TR 是否可用。
+- 下一步计划: 告诉用户当前链路成功但国家失败，并建议观察日志、等待或重试切换、检查免费账号国家池限制。
+
+## N028 - Cloudflare 节点无法直接使用宿主机 loopback 代理
+
+- branch_id: B002
+- parent_node_ids: N027
+- relation_type: next
+- 当时问题: 用户询问 Cloudflare 搭建的节点中能不能使用 `socks4://127.0.0.1:10080` 这个代理。
+- 触发原因（为什么想到这个）: 用户开始把本机 Podman 导出的 Tuxler 代理接入其它节点/平台，需要明确 `127.0.0.1` 的作用域，避免把本机可用误解成远端或 Cloudflare 边缘可用。
+- 当时假设: `127.0.0.1:10080` 只绑定在运行 Podman 的宿主机本地 loopback；Cloudflare Worker/Pages/边缘节点或其它远端机器里的 `127.0.0.1` 指向的是它自己，不会指向用户这台 Podman 宿主机。
+- 采取动作（做了什么实验/改了什么）: 基于当前 podman publish 绑定 `127.0.0.1:10080:10080` 的部署方式，分析本机进程、局域网其它机器、Cloudflare 远端节点三种访问范围。
+- 观察结果（事实）: 当前推荐命令只把代理端口发布到宿主机 `127.0.0.1`；宿主机本机 curl 已经可用；未把代理暴露到局域网 IP 或公网 IP。
+- 当时结论（解释）: Cloudflare 节点不能直接使用 `socks4://127.0.0.1:10080`，除非 Cloudflare 相关程序实际运行在同一台 Podman 宿主机上，或用户主动把代理监听地址改为可被该节点访问的网络地址；后者会扩大暴露面，需要鉴权和防火墙。
+- 证据等级（已验证 / 观察 / 猜想）: 已验证
+- 引出的下一步问题: 需要用户明确“Cloudflare 节点”具体是 Worker、Tunnel、WARP、还是本机代理客户端里的 Cloudflare 节点，以便判断是否支持上游 SOCKS。
+- 下一步计划: 向用户说明不能直接用本机 loopback，并给出同机可用、局域网暴露、Cloudflare Tunnel/远端不可直接用的区别。
+
+## N029 - 局域网另一台机器 localhost 也能访问代理的拓扑疑点
+
+- branch_id: B002
+- parent_node_ids: N028
+- relation_type: next
+- 当时问题: 用户在局域网另一台 Windows 机器上使用 `socks4://127.0.0.1:10080` 和 `socks4://192.168.1.9:10080` 都能访问 AU 出口，询问为什么 localhost 也可以。
+- 触发原因（为什么想到这个）: 这与前面“127.0.0.1 只表示当前机器本机”的网络基本规则冲突，说明实际拓扑里可能有本机转发、代理客户端、端口映射或命令运行位置误判。
+- 当时假设: 如果这确实是另一台机器，则 `127.0.0.1:10080` 能通只能说明那台 Windows 机器本地也有进程监听 10080 并转发到 Podman 宿主机或同一个 Tuxler 出口；另一种可能是命令实际运行在 Podman 宿主机/WSL/远程终端里，而不是物理上的另一台机器。
+- 采取动作（做了什么实验/改了什么）: 根据用户提供的 curl 输出和当前 Podman publish 绑定语义，重新判断 localhost 与 LAN IP 同时可用的原因范围。
+- 观察结果（事实）: 两个 curl 都返回同一个 AU/Brisbane/TPG Telecom Limited 出口；`192.168.1.9:10080` 可用说明宿主机或某层网络已经把代理暴露到了局域网；`127.0.0.1:10080` 可用说明执行 curl 的那台机器本地也存在可用代理或端口转发。
+- 当时结论（解释）: `127.0.0.1` 不会跨机器指向 `192.168.1.9`；该现象不是网络规则例外，而是存在本地监听/转发/代理软件，或用户执行环境其实就在代理宿主机上。需要用 `netstat`/`Get-NetTCPConnection` 找出 Windows 本地 10080 的监听进程。
+- 证据等级（已验证 / 观察 / 猜想）: 观察
+- 引出的下一步问题: 需要在那台 Windows 机器上确认 10080 的监听进程、是否有 Clash/mihomo/v2rayN/ssh tunnel/netsh portproxy/Cloudflare WARP 等本地转发。
+- 下一步计划: 给用户解释 localhost 作用域，并提供 Windows 侧定位监听进程和端口转发的命令。

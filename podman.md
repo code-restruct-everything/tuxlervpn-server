@@ -14,13 +14,17 @@
 
 不要再把宿主机端口直接映射到容器 `23321`，因为 Tuxler 实际只监听容器内部的 `127.0.0.1:23321`。
 
+查看运行日志
+
+podman logs -f tuxler-container-au
+
 ### AU
 
 ```bash
 podman pod create \
   --name tuxler-pod-au \
   --network slirp4netns:allow_host_loopback=true \
-  --publish 127.0.0.1:10080:10080/tcp
+  --publish 0.0.0.0:10080:10080/tcp
 
 podman run -d \
   --pod tuxler-pod-au \
